@@ -1,0 +1,33 @@
+{\rtf1\ansi\ansicpg1252\cocoartf1138
+{\fonttbl\f0\fswiss\fcharset0 Helvetica;\f1\fmodern\fcharset0 Courier;}
+{\colortbl;\red255\green255\blue255;}
+\margl1440\margr1440\vieww9000\viewh8400\viewkind0
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\qc
+
+\f0\b\fs24 \cf0 Directory Service check script\
+
+\b0 This installer will install the following three components:\
+\
+{\field{\*\fldinst{HYPERLINK "file:///usr/local/bin/dscheck"}}{\fldrslt /usr/local/bin/dscheck}}\
+\
+This script is used to watch the directory service daemon, if it fails to do a user lookup with a 10 second grace period, Directory Service is relaunched. This relaunch occurs only once per day , however all failure notifications will be sent via email and logged to {\field{\*\fldinst{HYPERLINK "file:///Library/Logs/dscheck"}}{\fldrslt /Library/Logs/dscheck}}. Success notifications are logged once per hour to the system log by virtue of launched, the system log is rotated every 7 days.\
+\
+{\field{\*\fldinst{HYPERLINK "file:///Library/LaunchDaemons/org.318.dscheck.plist"}}{\fldrslt /Library/LaunchDaemons/org.318.dscheck.plist}}\
+This launched item is set to launch at startup and run every minute and on network changes. the dscheck script has built in logic to only check user resolution after 5mins of the first boot\
+\
+This startup item can be disabled using the following command:\
+\
+
+\f1 /bin/launchctl unload -w /Library/LaunchDaemons/com.318.dscheck.plist\
+\
+{\field{\*\fldinst{HYPERLINK "applescript://com.apple.scripteditor?action=new&script=do%20shell%20script%20%22/bin/launchctl%20unload%20-w%20/Library/LaunchDaemons/com.318.dscheck.plist%22%20with%20administrator%20privileges"}}{\fldrslt Click here to open up a run window with this code\
+}}\
+
+\f0 \
+{\field{\*\fldinst{HYPERLINK "file:///usr/local/bin/sendEmail"}}{\fldrslt /usr/local/bin/sendEmail}}\
+This is a free script, updates can be download from \
+\
+{\field{\*\fldinst{HYPERLINK "http://caspian.dotconf.net/menu/Software/SendEmail/"}}{\fldrslt http://caspian.dotconf.net/menu/Software/SendEmail/\
+\
+}}Created by {\field{\*\fldinst{HYPERLINK "mailto:zsmith@318.com"}}{\fldrslt Zack Smith}}{\field{\*\fldinst{HYPERLINK "http://caspian.dotconf.net/menu/Software/SendEmail/"}}{\fldrslt \
+}}}

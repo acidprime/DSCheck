@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.318.dscheck</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/bin/dscheck</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StartInterval</key>
+	<integer>60</integer>
+	<key>WatchPaths</key>
+	<array>
+		<string>/Library/Preferences/SystemConfiguration/preferences.plist</string>
+	</array>
+	<key>UserName</key>
+	<string>root</string>
+</dict>
+</plist>

@@ -1,0 +1,214 @@
+#!/bin/bash
+###############################################################################
+# This script monitors for Directory Service lookup Failures and notifies via email
+# It attempts to restart DirectoryServices ( once per day ) It requires sendEmail
+# Download and install http://caspian.dotconf.net/menu/Software/SendEmail/ ->
+# /usr/local/bin/sendEmail and ensure its executable w/ chmod +x /path/to/file
+# Created by Zack Smith zsmith@318.com
+###############################################################################
+declare -x BUILDVERSION="20100309"
+
+[ "$EUID" != 0 ] &&
+	printf "%s\n" "This script requires root access ($EUID)!" &&
+															exit 1
+# Command declaration
+declare -x awk="/usr/bin/awk"
+declare -x cat="/bin/cat"
+declare -x dscl="/usr/bin/dscl"
+declare -x date="/bin/date"
+declare -x rm="/bin/rm"
+declare -x dsconfigad="/usr/sbin/dsconfigad"
+declare -x dscacheutil="/usr/bin/dscacheutil"
+declare -x killall="/usr/bin/killall"
+declare -x id="/usr/bin/id"
+declare -x mkdir="/bin/mkdir"
+declare -x logger="/usr/bin/logger"
+declare -x ping="/sbin/ping"
+declare -x perl="/usr/bin/perl"
+declare -x sleep="/bin/sleep"
+declare -x sysctl="/usr/sbin/sysctl"
+declare -x ssh="/usr/bin/ssh"
+declare -x touch="/usr/bin/touch"
+declare -x launchctl="/bin/launchctl"
+# Not installed by Default
+declare -x sendEmail="/usr/local/bin/sendEmail"
+
+[ ! -x "$sendEmail" ] &&
+	printf "%s\n" "This script requires $sendEmail to be installed" &&
+															exit 1
+
+# Email settings for the sendEmailNow Function
+declare -ix WAIT=10								# Define the time to wait before killing Direcory Service
+declare -ix FIVE_MINS=3600						# FirstBootWait
+declare -x HOST_TO_CHECK="$($dsconfigad -show |
+								$awk '/Active Directory Domain/{print $NF;exit}')"	
+declare -x EMAIL_SERVER="172.16.15.27"
+declare -x EMAIL_TO="servers@318.com"
+declare -x EMAIL_FROM="$HOSTNAME@318.com"
+declare -x EMAIL_FILE="/private/tmp/dscheck_email_$$$RANDOM.txt" # Temp file for our email body
+declare -x USER_TO_CHECK="administrator"	# Choose a user that is in Directory Service that will always exist
+declare -x CURRENT_DATE="$($date +%y%m%d)"
+declare -x BREAD_CRUM="/Library/Caches/DirectoryServiceLookup.$CURRENT_DATE"
+declare -x LOG_BASE="/Library/Logs/dscheck"
+declare -x LOG_DIRECTORY="${LOG_BASE:?}/${CURRENT_DATE:?}"
+declare -x LOG_FILE="$LOG_DIRECTORY/dscheck-$($date +%H_%M_%S).log"
+declare -x LAUNCHD_ITEM="/Library/LaunchDaemons/org.thompsonschools.dscheck.plist"
+declare -x FIRST_BOOT_FILE="/private/tmp/dscheck.reboot"
+
+generateEmail(){
+	echo "---------------------------------------------------------------------" >>"${EMAIL_FILE:?}"
+	echo "You can disable this script using the following command:" >>"${EMAIL_FILE:?}"
+	echo "$ssh $launchctl unload -w $LAUNCHD_ITEM" >>"${EMAIL_FILE:?}"
+	echo "---------------------------------------------------------------------" >>"${EMAIL_FILE:?}"
+	echo "DSCL Stats for Active Directory ( $dscl '/Active Directory' -read / )" >>"${EMAIL_FILE:?}"
+	$dscl '/Active Directory' -read /  >>"${EMAIL_FILE:?}" >>"${EMAIL_FILE:?}"
+	echo "---------------------------------------------------------------------" >>"${EMAIL_FILE:?}"
+	echo "The current AD Plugin settings ($dsconfigad -show)" >>"${EMAIL_FILE:?}"
+	$dsconfigad -show >>"${EMAIL_FILE:?}"
+	echo "---------------------------------------------------------------------" >>"${EMAIL_FILE:?}"
+	echo "Ping the domain ($ping -c "$HOST_TO_CHECK")" >>"${EMAIL_FILE:?}"
+	$ping -c 2 "${HOST_TO_CHECK:?}" 2>&1 >>"${EMAIL_FILE:?}"
+	echo "Please note, this output may fail if one or more DC's are not accessible" >>"${EMAIL_FILE:?}"
+	echo "---------------------------------------------------------------------" >>"${EMAIL_FILE:?}"
+	echo "Attached you will find the Directory Service Logs" >>"${EMAIL_FILE:?}"
+	echo "You can also find this scripts logs located in:" >>"${EMAIL_FILE:?}"
+	echo "file://$LOG_BASE" >>"${EMAIL_FILE:?}"
+	$sendEmail \
+	-s "${EMAIL_SERVER:?}" \
+	-t "${EMAIL_TO:?}" \
+	-u "${EMAIL_SUBJECT:?}" \
+	-m "$($cat "${EMAIL_FILE:?}" )" \
+	-f "${EMAIL_FROM:?}" \
+	-a "${LOG_DIRECTORY}/"*.log /Library/Logs/DirectoryService/*.log -l "${LOG_FILE%%.log}-email.log"
+	echo "Sent Email Notification:"  >> "$LOG_FILE"
+	$cat "$EMAIL_FILE" >> "$LOG_FILE"
+	
+}
+
+runOnStartup(){
+	# Pull the current time in epoch
+	declare -xi EPOCH_TIME="$($perl -e 'print time;')"
+	# Pull the boot time in epoch
+	declare -xi BOOT_TIME="$($sysctl -a |
+								$awk -F'[ ,]' '/kern.boottime:/{print $5}')"
+	# Check for file /tmp is cleaned up every reboot by the system
+	if [ ! -f "${FIRST_BOOT_FILE:?}" ] ; then
+		echo "It Appears this is the first run of the script this boot" >> "$LOG_FILE"
+		declare -i TIME_SKEW="$((${EPOCH_TIME:=0} - ${BOOT_TIME:=0}))"
+		if [ ${TIME_SKEW:-0} -gt "${FIVE_MINS:?}" ] ; then
+			echo "Machine has been running for longer then $FIVE_MINS seconds"
+			echo "Disabling first boot checks..." >> "$LOG_FILE"
+			$touch "$FIRST_BOOT_FILE"
+		else
+			echo "Waiting for 5 minutes from first boot" >> "$LOG_FILE"
+			$sleep $(("${FIVE_MINS:=3600}" - ${TIME_SKEW:=1}))
+			$touch "$FIRST_BOOT_FILE"
+
+		fi
+	fi
+}
+
+makeLogDirectory(){
+	if [ ! -d "$LOG_DIRECTORY" ] ; then
+		echo "Creating Log Directory..." >> "$LOG_FILE"
+		$mkdir -p "${LOG_DIRECTORY:?}" &>/dev/null
+	fi
+}
+
+finalUserCheck(){
+	if ! $id "${USER_TO_CHECK:?}" &>/dev/null ; then
+		export ORGINAL_FAILURE_DATE="$FAILED_DATE"
+		# Grab a new Failure date for the last failure test
+		export FAILED_DATE="$($date)"
+		export EMAIL_SUBJECT="[CRITICAL] - [FAILED] DirectoryService was restarted, but user resolution is still failing"
+		echo "$EMAIL_SUBJECT"  >>"${EMAIL_FILE:?}"
+		printf "%s\t%s\n" "User used for validation:" "$USER_TO_CHECK" >>"${EMAIL_FILE:?}"
+		printf "%s\t\t%s\n" "Run this command manually by using:" "($id $USER_TO_CHECK)" >>"${EMAIL_FILE:?}"
+		echo "---------------------------------------------------------------------" >>"${EMAIL_FILE:?}"
+		printf "%s\t%s\n" "Orginal Failure occured at:" "$ORGINAL_FAILURE_DATE" >>"${EMAIL_FILE:?}"
+		printf "%s\t%s\n" "Current Failure occured at:" "$FAILED_DATE" >>"${EMAIL_FILE:?}"
+		echo "---------------------------------------------------------------------" >>"${EMAIL_FILE:?}"
+		generateEmail
+	else
+		declare RECOVERY_DATE="$($date)"
+		export EMAIL_SUBJECT="[WARNING] - [RESTART & RECOVERY] DirectoryService was restarted, but has recovered at $RECOVERY_DATE"
+		echo "$EMAIL_SUBJECT"  >>"${EMAIL_FILE:?}"
+		printf "%s\t%s\n" "User used for validation:" "$USER_TO_CHECK" >>"${EMAIL_FILE:?}"
+		printf "%s\t\t%s\n" "Run this command manually by using:" "($id $USER_TO_CHECK)" >>"${EMAIL_FILE:?}"
+		echo "---------------------------------------------------------------------" >>"${EMAIL_FILE:?}"
+		printf "%s\t%s\n" "Orginal Failure occured at:" "$FAILED_DATE" >>"${EMAIL_FILE:?}"
+		printf "%s\t%s\n" "Recovery Occured at:" "$RECOVERY_DATE" >>"${EMAIL_FILE:?}"
+		echo "---------------------------------------------------------------------" >>"${EMAIL_FILE:?}"
+		generateEmail
+	fi
+}
+
+
+# Kill DirectoryService Routine
+killDirectoryService(){
+	if [ ! -f "$BREAD_CRUM" ] ; then
+		echo "Attempting to Kill Directory Service" >> "$LOG_FILE"
+		$killall DirectoryService
+		echo "Creating breadcrum file $BREAD_CRUM for subsequent run attempt" >> "$LOG_FILE"
+		# Save the date when the run was in the breadcrum
+		echo  "$($date)" > "$BREAD_CRUM"
+		finalUserCheck
+	else
+		export EMAIL_SUBJECT="[CRITICAL] - [EXCEEDED] DirectoryService has failed but has exceeded daily restart attempts"
+		echo "$EMAIL_SUBJECT"  >>"${EMAIL_FILE:?}"
+		printf "%s\t%s\n" "Most Recent Failure occured at:" "$FAILED_DATE" >>"${EMAIL_FILE:?}"
+		echo "---------------------------------------------------------------------" >>"${EMAIL_FILE:?}"
+		printf "%s\t%s\n" "Directory Service has already been restarted once today at:" "$($cat "$BREAD_CRUM" )" >>"${EMAIL_FILE:?}"
+		echo "This server may require immediate attention" >>"${EMAIL_FILE:?}"
+		echo "You can reset this warning using the following command:" >>"${EMAIL_FILE:?}"
+		echo "$ssh root@$HOSTNAME $rm $BREAD_CRUM" >>"${EMAIL_FILE:?}"
+		echo "---------------------------------------------------------------------" >>"${EMAIL_FILE:?}"
+		echo "You can restart DirectoryService manually using the following Terminal command:" >>"${EMAIL_FILE:?}"
+		echo "$ssh root@$HOSTNAME $killall DirectoryService" >>"${EMAIL_FILE:?}"
+		echo "---------------------------------------------------------------------" >>"${EMAIL_FILE:?}"
+		generateEmail
+		exit 0
+	fi
+}
+
+
+makeLogDirectory
+
+if ! $id "${USER_TO_CHECK:?}" &>/dev/null; then
+	export FAILED_DATE="$($date)"
+	# Redirect Stderr to log, don't place higher or empty file will be created
+	exec 2>> "$LOG_FILE"
+	
+	runOnStartup
+	echo "Detected Directory Service Failure at $FAILED_DATE" >> "$LOG_FILE"
+	echo "Waiting $WAIT seconds" >> "$LOG_FILE"
+	$sleep "${WAIT:?}"
+	# Run the check again
+	$dscacheutil -flushcache
+	if ! $id "${USER_TO_CHECK:?}" &>/dev/null; then
+		echo "User Lookup Failures still present after grace period."  >> "$LOG_FILE"
+		killDirectoryService
+	else
+		# In this scenerio we have received from an ealier failure but we still notify
+		export RECOVERY_DATE="$($date)"
+		export EMAIL_SUBJECT="[WARNING] - [RECOVERY] DirectoryService failed, but recovered on its own at $RECOVERY_DATE"
+		echo "$EMAIL_SUBJECT"  >>"${EMAIL_FILE:?}"
+		printf "%s\t%s\n" "User used for validation:" "$USER_TO_CHECK" >>"${EMAIL_FILE:?}"
+		printf "%s\t\t%s\n" "Run this command manually by using:" "($id $USER_TO_CHECK)" >>"${EMAIL_FILE:?}"
+		echo "---------------------------------------------------------------------" >>"${EMAIL_FILE:?}"
+		printf "%s\t%s\n" "Orginal Failure occured at:" "$FAILED_DATE" >>"${EMAIL_FILE:?}"
+		printf "%s\t%s\n" "Recovery occured at:" "$RECOVERY_DATE" >>"${EMAIL_FILE:?}"
+		echo "---------------------------------------------------------------------" >>"${EMAIL_FILE:?}"
+		generateEmail
+	fi
+	exit 0
+else
+	# The following goes to the system log which auto rotates every 7 days
+	# Grab the current minute for the test below
+	declare -i CURRENT_MIN="$(printf "%.0f" $($date +%M))"
+	# Keep the log entries to about once an hour (logging handled by stout and launchd)
+	if [ ${CURRENT_MIN:=1} -eq 0 ] ; then 
+		echo "User lookup succeeded, no action necessary at $($date)"
+	fi
+	exit 0
+fi

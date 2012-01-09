@@ -1,0 +1,17 @@
+#!/bin/bash
+
+declare -x launchctl="/bin/launchctl"
+declare -x chmod="/bin/chmod"
+declare -x chown="/usr/sbin/chown"
+declare -x LAUNCHD_ITEM="/Library/LaunchDaemons/com.318.dscheck.plist"
+
+if [ -f "$LAUNCHD_ITEM" ] ; then
+	echo "Updating ownership of launchd item do to common Package maker issues"
+	$chown 0:0 "$LAUNCHD_ITEM"
+	$chmod 755 "$LAUNCHD_ITEM"
+	$launchctl load -w 	"$LAUNCHD_ITEM"
+	exit 0
+else
+	echo "Startup Item: $LAUNCHD_ITEM missing"
+	exit 1
+fi
